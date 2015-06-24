@@ -1,0 +1,29 @@
+body{
+    -khtml-user-select: none;
+    -o-user-select: none;
+    -moz-user-select: none;
+    -webkit-user-select: none;
+    user-select: none;
+	padding:0px;
+	margin:0px;
+}
+body * {
+-webkit-tap-highlight-color: rgba(0,0,0,0);
+}
+img {
+    text-align: center;
+}
+td.legend {
+    text-align: center;
+}
+#legend {
+	position: fixed;
+	bottom: -102px;
+	right:0px;
+	padding:10px;
+	background-color:lightgrey;
+	border-top:2px solid grey;
+	border-left:2px solid grey;
+	transition: bottom 1s; 
+	cursor:pointer;
+}

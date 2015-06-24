@@ -1,0 +1,1094 @@
+<html>
+<head> 
+<meta name="viewport" content="width=device-width, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta charset="utf-8"> 
+<title> Login to THE GAME </title>
+<script src="game_scripts/player.js"></script>
+<script src="game_scripts/enemy.js"></script>
+<script src="game_scripts/box.js"></script>
+<script src="game_scripts/wall.js"></script>
+<script src="game_scripts/boss.js"></script>
+<script src="https://code.jquery.com/jquery-1.10.2.js"></script>
+<script type="text/javascript">
+setTimeout( function(){ window.scrollTo(0, 1); }, 100 ); // Disable Scroll
+$(document).bind('touchmove', false); // Disable Scroll
+
+var webSocketConnectionString = "";
+// NOTICE: If testing MULTIPLAYER on a single browser set to false
+var USE_COOKIES = true;
+
+/* Connection Variables START */
+var socket;
+var playerId;
+var gameId;
+var gameList = [];
+var gamePlayerNumber;
+var numGames;
+/* Connection Variables END */
+/* UI Variables START */
+var stageGameSelection = true;
+var stageCreateGame = false;
+var stageGame = false;
+var stageGameOver = false;
+var context;
+var gameSelectedIndex = null;
+var gameOverX = 0;
+var gameOverY = 0;
+var gameOverScreenOffset = {x: 0, y: 0};
+var gameOverCountdown = 15;
+var gameSelectionRect = [];
+var joinDisabled=true;
+var gameListScroll = 0;
+var legendToggleT = false;
+var drawHitSpots = false;
+var dialogText = "";
+var showDialogBox = false;
+var xAcc = null, yAcc, zAcc;
+var xLastAcc = null, yLastAcc, zLastAcc;
+var addShakePadding = 0;
+// Buttons
+var createGameButton = {x: 18.5, y: 419, w: 110, h: 25};
+var joinGameButton = {x: 336.5, y: 419, w: 95, h: 25};
+var okGameButton = {x: 274, y: 365, w: 60, h: 25};
+var cancelGameButton = {x: 116, y: 365, w: 70, h: 25};
+var startGameButton = {x: 149, y: 215, w: 87, h: 25};
+var leaveGameButton = {x: 16, y: 215, w: 90, h: 25};
+var logoutGameButton = {x: 1, y: 215, w: 87, h: 25};
+var refreshButton = {x: 345, y: 5, w: 85, h: 21};
+var expandXButton = {x: 175, y: 140, w: 100, h: 20};
+var contractXButton = {x: 175, y: 330, w: 100, h: 20};
+var expandYButton = {x: 315, y: 195, w: 20, h: 100};
+var contractYButton = {x: 115, y: 195, w: 20, h: 100};
+var okDialogButton = {x: 274, y: 265, w: 60, h: 25};
+// Timers
+var shakeTimer = null;
+var gameOverTimer=null;
+var gameListTimer=null;
+var timer=null;
+/* UI Variables END */
+/* Game Variables START */
+var objectIdList = [];
+var score = 0;
+var gameover = false;
+var player;
+var gameSizeX = 15;
+var gameSizeY = 15;
+var nextLevelBool = false;
+var level = 1;
+var moveTimerResetter = true;
+var moveTimer = null;
+var playerSector = [[24,24],[12,24],[24,12],[12,12]];
+/* Game Variables END */
+/* DOM Variables START */
+var enmyImg;
+var enemyDeadImg;
+var boxImg;
+var playerImgs = [];
+var deadPlayerImgs = [];
+var wallImg;
+var bossImgTL;
+var bossImgTR;
+var bossImgBL;
+var bossImgBR;
+var canvas;
+/* DOM Variables END */
+var requestPidStage = 0;
+function initConnection(){
+	var _this = this;
+	socket = new WebSocket(webSocketConnectionString);
+	socket.onopen = function (event) {
+		var i;
+		if(USE_COOKIES){
+			var cookieVar = document.cookie.split('; ');
+			for(i=0; i<cookieVar.length; i++) {
+				var c = cookieVar[i];
+				if(c[0] == 'p' && c[1] == 'i' && c[2] == 'd' && c[3] == '='){
+					requestPidStage = 1;
+					socket.send(JSON.stringify([-1, parseInt(c.substring(4))])); // Request a playerID
+				}
+			}
+		}
+		socket.send(JSON.stringify([4]));
+		startGameListTimer();
+	};
+	socket.onclose = function (event) {
+		checkSocket();
+	};
+	socket.onmessage = function (event) {
+		var messageArr = JSON.parse(event.data);
+		switch(messageArr[0]){
+		case -2: /* Set Game Player Number */
+			gamePlayerNumber = messageArr[1];
+			break;
+		case -1: /* Set Player Id */
+			playerId = messageArr[1];
+			if(requestPidStage == 1){
+				requestPidStage = 2;
+				break;
+			}
+			
+			if(playerId != -1){
+				document.cookie="pid="+playerId; // Save playerID
+			}else{
+				stageGameSelection = false;
+				dialogBox(["Connection to game already","open. Please Refresh.","Or close the other game"]);
+			}
+			break;
+		case 0: /* Game List */
+			if(!stageGameSelection) return;
+			canvas.width = 450;
+			canvas.height = 450;
+			numGames = messageArr[1];
+			if(numGames > 0){
+				if(gameSelectedIndex == null)
+					gameSelectedIndex=0;
+				joinDisabled = false;
+			}else{
+				gameSelectedIndex=null;
+				joinDisabled = true;
+			}
+			gameList = [];
+			var i = 2;
+			for(; i < numGames+2; i++){
+				if(typeof messageArr[i] !== "undefined")
+				gameList[gameList.length] = [messageArr[i][0], messageArr[i][1], messageArr[i][2], messageArr[i][3], messageArr[i][4]];
+			}
+			drawGameList();
+			break;
+		case 1: /* Draw New Board */
+			if(stageGameOver && !stageGame) return;
+			stageGameOver = false;
+			stageGameSelection = false;
+			createGameSelection = false;
+			stageGame = true;
+			gameSizeX = gameList[gameSelectedIndex][3];
+			gameSizeY = gameList[gameSelectedIndex][4];
+			canvas.width = gameSizeX*30;
+			canvas.height = gameSizeY*30;
+			stopGameListTimer();
+			startTimer();
+	
+			objectIdList=[];
+			var playerCount = messageArr[1];
+			level = messageArr[2];
+			score = messageArr[3];
+			var i;
+			for(i = 4; i < playerCount+4; i++){
+				var obj = messageArr[i];
+				var pl;
+				objectIdList[obj[2]]=pl=new Player(obj[0], obj[1], null, obj[2], obj[3], playerImgs[obj[3]], deadPlayerImgs[obj[3]]);
+				if(obj[4]) pl.die();
+				if(obj[3] == gamePlayerNumber)
+					player = pl;
+			}
+			if(player == null){
+				dialogBox(["Error Refresh Page."]);
+				stageGameSelection = true;
+				stageGame = false;
+				return;
+			}
+			for(; i < messageArr.length; i++){
+				var obj = messageArr[i];
+				switch(obj[2]){
+					case enemyNum:
+						objectIdList[obj[3]]=new Enemy(obj[0], obj[1], null, obj[3], enemyImg, enemyDeadImg);
+						break;
+					case bossNum:
+						objectIdList[obj[3]]=new Boss(obj[0], obj[1], null, obj[3], bossImgTL, bossImgTR, bossImgBL, bossImgBR, enemyDeadImg);
+						break;
+					case boxNum:
+						objectIdList[obj[3]]=new Box(obj[0], obj[1], null, obj[3], boxImg);
+						break;
+					case wallNum:
+						objectIdList[obj[3]]=new Wall(obj[0], obj[1], null, obj[3], wallImg);
+						break;
+				}
+			}
+			drawGameBoard();
+			break;
+		case 2: /* Update Board */
+			if(stageGameOver) return;
+			var i = 1;
+			for(; i < messageArr.length; i++){
+				var obj = messageArr[i];
+				objectIdList[obj[2]].x = obj[0];
+				objectIdList[obj[2]].y = obj[1];
+			}
+			drawGameBoard();
+			break;
+		case 3: /* Other Player Enter */
+			var objId = messageArr[3];
+			var playerNumber = messageArr[4];
+			var dead = messageArr[5];
+			objectIdList[objId]=new Player(messageArr[1], messageArr[2], null, objId, playerNumber, playerImgs[playerNumber], deadPlayerImgs[playerNumber]);
+			if(playerNumber == gamePlayerNumber) // Shouldn't be called, just in case
+				player = objectIdList[objId];
+			if(dead)
+				objectIdList[objId].die();
+			drawGameBoard();
+			break;
+		case 4: /* Other Player Leave */
+			var objId = messageArr[2];
+			var playerNumber = messageArr[3];
+			delete objectIdList[objId];
+			break;
+		case 5: /* Object State Change (Dead) */
+			var i = 0;
+			for(;i<messageArr[1].length;i++){
+				var m = messageArr[1][i];
+				var objId = m[0];
+				var state = m[1];
+				if(state == 1)
+					objectIdList[objId].die();
+			}
+			break;
+		case 6: /* Score Update */
+			var scoreTotal = messageArr[1];
+			var scoreAmount = messageArr[2];	
+			score = scoreTotal;
+			break;
+		case 7: /* Game Over */
+			stageGame = false;
+			var win = messageArr[1];
+			var s = messageArr[2];
+			var np = messageArr[3];
+			score = s;
+			gameOverScreen(win);
+			gameOverScreenWait(np);
+			break;
+		case 8: /* Game Over Ranking */
+			if(stageGameOver){
+				var rank = messageArr[1];
+				gameOverScreenRank(rank);
+			}
+			break;
+		case 9: /* # Players waiting to continue */
+			if(stageGameOver){
+				var numLeft = messageArr[1];
+				gameOverScreenWait(numLeft);
+			}
+			break;
+		case 10: /* Could not Login Message */
+			var msg = messageArr[1];
+			stopTimer();
+			stageGame = false;
+			socket.send(JSON.stringify([4]));
+			startGameListTimer();
+			switch(msg){
+				case 0:
+				dialogBox(["Too many players."]);
+				break;
+				case 1:
+				dialogBox(["Do you have a twin?","You are already in the game!"]);
+				break;
+				case 2:
+				dialogBox(["Game no longer exists."]);
+				break;
+				case 3:
+				dialogBox(["Game is already over."]);
+				break;
+			}
+			break;
+		}
+	}
+};
+function checkSocket(){
+	if(socket.readyState == 1) return true;
+	stageGameSelection = false;
+	stageCreateGame = false;
+	stageGame = false;
+	stageGameOver = false;
+	
+	stopTimer();
+	stopGameOverTimer();
+	stopGameListTimer();
+	
+	var w = (canvas.width-250)/2;
+	var h = (canvas.height-250)/2;
+	context.lineWidth = 3;
+	context.fillStyle="#2347b2";
+	context.strokeStyle="#4775ff";
+	context.fillRect(w, h, 250, 125);
+	context.strokeRect(w, h, 250, 125);
+	context.lineWidth = 2;
+	context.fillStyle="#000000";
+	context.strokeStyle="#000000";
+	context.font="bold 22px Georgia";
+	context.fillText("Lost Connection",w+37,h+30);
+	context.font="bold 18px Georgia";
+	context.fillText("Please Refresh the Page.",w+10,h+100);
+	return false;
+}
+/* Draw Screen Functions START */
+function drawGameList(){
+	context.fillStyle="#2347b2";
+	context.fillRect(0, 0, 450, 450);
+	context.fillStyle="#3366FF";
+	context.fillRect(35, 32, 380, 380);
+	context.strokeStyle="#4775ff";
+	context.lineWidth = 3;
+	context.strokeRect(35, 32, 380, 380);
+	context.fillStyle="#000000";
+	context.strokeStyle="#000000";
+	context.font="bold 20px Georgia";
+	context.fillText("Game List",10,25);
+	
+	context.font="14px Georgia";
+	context.fillStyle="#0099FF";
+	context.strokeStyle="#99D6FF";
+	context.lineWidth = 2;
+	context.fillRect(createGameButton.x, createGameButton.y, createGameButton.w, createGameButton.h);
+	context.strokeRect(createGameButton.x, createGameButton.y, createGameButton.w, createGameButton.h);
+	context.fillRect(refreshButton.x, refreshButton.y, refreshButton.w, refreshButton.h);
+	context.strokeRect(refreshButton.x, refreshButton.y, refreshButton.w, refreshButton.h);
+	if(joinDisabled){
+		context.fillStyle="#006bb2";
+		context.strokeStyle="#7aabcc";
+	}
+	context.fillRect(joinGameButton.x, joinGameButton.y, joinGameButton.w, joinGameButton.h);
+	context.strokeRect(joinGameButton.x, joinGameButton.y, joinGameButton.w, joinGameButton.h);
+	context.fillStyle="#000000";
+	context.fillText("Refresh",363,21);
+	context.fillText("Create Game",34,438);
+	context.fillText("Join Game",352,438);
+	if(window.DeviceMotionEvent){
+		context.font="12px Arial";
+		context.fillText("SHAKE To Join A Random Game",143,438);
+	}
+	// Scroll up or down if selected arrows
+	var localSelect = gameSelectedIndex-gameListScroll*12+gameListScroll;
+	if((gameListScroll == 0?localSelect == 12:localSelect%12 == 11)
+			&& numGames > 13)
+		gameListScroll++;
+	else if(gameListScroll != 0 && localSelect == -1)
+		gameListScroll--;
+	var i, c;
+	gameSelectionRect=[];
+	context.font="14px Arial";
+	for(i=0,c=-gameListScroll*12+gameListScroll;i < numGames; i++,c++){
+		var game = gameList[i];
+		var g;
+		gameSelectionRect[gameSelectionRect.length] = g = {x: 35, y: 32+i*29-319*gameListScroll+(gameListScroll>0?29:0), w: 380, h: 29};
+		if(c >= -1 && (gameListScroll == 0? c < 13:c < 12)){
+			if(i == gameSelectedIndex){
+				context.fillStyle="#84a3ff";
+				context.strokeStyle="#4775ff";
+			}else{
+				context.fillStyle="#3366FF";
+				context.strokeStyle="#4775ff";
+			}
+			context.fillRect(g.x, g.y, g.w, g.h);
+			context.strokeRect(g.x, g.y, g.w, g.h);
+			context.fillStyle="#000000";
+			if(gameListScroll != 0 && c == -1){
+				context.fillText("/\\  /\\  /\\  /\\  /\\  /\\  /\\  /\\  /\\  /\\  /\\  /\\",g.x+100,g.y+20);
+			}else if((gameListScroll == 0?c == 12:c%12 == 11) && numGames > i+1 && numGames != 13){
+				context.fillText("\\/  \\/  \\/  \\/  \\/  \\/  \\/  \\/  \\/  \\/  \\/  \\/",g.x+100,g.y+20);
+			}else{
+				context.fillText("Game"+game[2],g.x+5,g.y+20);
+				context.fillText("Level #"+game[1],g.x+90,g.y+20);
+				context.fillText(game[3]+"x"+game[4],g.x+190,g.y+20);
+				context.fillText("# Players "+game[0]+"/4",g.x+280,g.y+20);
+			}
+		}
+	}
+	dialogBox(); // Draw Dialog if needed
+}
+function createGameScreen(){
+	stageCreateGame = true;
+	context.fillStyle="#2347b2";
+	context.strokeStyle="#4775ff";
+	context.lineWidth = 3;
+	context.fillRect(100, 100, 250, 300);
+	context.strokeRect(100, 100, 250, 300);
+	context.lineWidth = 2;
+	context.fillStyle="#3366FF";
+	context.strokeStyle="#4775ff";
+	var w = 6*gameSizeX;
+	var h = 6*gameSizeY;
+	context.fillRect(225-w/2, 245-h/2, w, h);
+	context.strokeRect(225-w/2, 245-h/2, w, h);
+	context.fillStyle="#000000";
+	context.strokeStyle="#000000";
+	context.font="bold 18px Georgia";
+	context.fillText("Create Game",108,122);
+	context.font="bold 14px Georgia";
+	context.fillText(gameSizeX+"x"+gameSizeY,205,250);
+	
+	context.fillStyle="#0099FF";
+	context.strokeStyle="#99D6FF";
+	context.fillRect(okGameButton.x, okGameButton.y, okGameButton.w, okGameButton.h);
+	context.strokeRect(okGameButton.x, okGameButton.y, okGameButton.w, okGameButton.h);
+	context.fillRect(cancelGameButton.x, cancelGameButton.y, cancelGameButton.w, cancelGameButton.h);
+	context.strokeRect(cancelGameButton.x, cancelGameButton.y, cancelGameButton.w, cancelGameButton.h);
+	
+	context.fillRect(expandXButton.x, expandXButton.y, expandXButton.w, expandXButton.h);
+	context.strokeRect(expandXButton.x, expandXButton.y, expandXButton.w, expandXButton.h);
+	context.fillRect(contractXButton.x, contractXButton.y, contractXButton.w, contractXButton.h);
+	context.strokeRect(contractXButton.x, contractXButton.y, contractXButton.w, contractXButton.h);
+	context.fillRect(expandYButton.x, expandYButton.y, expandYButton.w, expandYButton.h);
+	context.strokeRect(expandYButton.x, expandYButton.y, expandYButton.w, expandYButton.h);
+	context.fillRect(contractYButton.x, contractYButton.y, contractYButton.w, contractYButton.h);
+	context.strokeRect(contractYButton.x, contractYButton.y, contractYButton.w, contractYButton.h);
+	
+	context.fillStyle="#000000";
+	context.strokeStyle="#000000";
+	
+	context.beginPath();
+	// X Contract
+	context.moveTo(185,340);
+	context.lineTo(215,340);
+	context.lineTo(210,345);
+	context.moveTo(215,340);
+	context.lineTo(210,335);
+	context.moveTo(265,340);
+	context.lineTo(235,340);
+	context.lineTo(240,345);
+	context.moveTo(235,340);
+	context.lineTo(240,335);
+	// X Expand
+	context.moveTo(190,155);
+	context.lineTo(185,150);
+	context.lineTo(190,145);
+	context.moveTo(185,150);
+	context.lineTo(265,150);
+	context.lineTo(260,155);
+	context.moveTo(265,150);
+	context.lineTo(260,145);
+	// Y Expand
+	context.moveTo(320,210);
+	context.lineTo(325,205);
+	context.lineTo(330,210);
+	context.moveTo(325,205);
+	context.lineTo(325,285);
+	context.lineTo(330,280);
+	context.moveTo(325,285);
+	context.lineTo(320,280);
+	// Y Contract
+	context.moveTo(125,205);
+	context.lineTo(125,240);
+	context.lineTo(120,235);
+	context.moveTo(125,240);
+	context.lineTo(130,235);
+	context.moveTo(125,285);
+	context.lineTo(125,260);
+	context.lineTo(120,255);
+	context.moveTo(125,260);
+	context.lineTo(130,255);
+	context.stroke();
+	
+	context.font="14px Georgia";
+	context.fillText("Okay",289,383);
+	context.fillText("Cancel",129,383);
+}
+function dialogBox(text){
+	if(typeof text !== "undefined"){
+		dialogText=text;
+		showDialogBox=true;
+	}
+	if(!showDialogBox)return false;
+	context.fillStyle="#2347b2";
+	context.strokeStyle="#4775ff";
+	context.lineWidth = 3;
+	context.fillRect(100, 125, 250, 190);
+	context.strokeRect(100, 125, 250, 190);
+	context.lineWidth = 2;
+	context.fillStyle="#0099FF";
+	context.strokeStyle="#99D6FF";
+	context.fillRect(okDialogButton.x, okDialogButton.y, okDialogButton.w, okDialogButton.h);
+	context.strokeRect(okDialogButton.x, okDialogButton.y, okDialogButton.w, okDialogButton.h);
+	context.fillStyle="#000000";
+	context.strokeStyle="#000000";
+	context.font="bold 18px Georgia";
+	context.fillText("I Can't Let You Join",110,152);
+	context.font="bold 14px Georgia";
+	for(i=0;i<dialogText.length;i++)
+		context.fillText(dialogText[i],110,182+i*20);
+	context.font="14px Georgia";
+	context.fillText("Okay",289,283);
+}
+/* Draw Screen Functions END */
+
+/* Event Functions START */
+function continueGame(){
+	stopGameOverTimer();
+	if(!checkSocket())return;
+	stageGame = true;
+	context.fillStyle="#2347b2";
+	context.fillRect(gameOverX+100, gameOverY+124, 55, 40);
+	socket.send(JSON.stringify([5, playerId, gameId]));
+}
+function leaveGame(){
+	stopGameOverTimer();
+	stageGameOver = false;
+	stageGame = false;
+	stageGameSelection=true;
+	startGameListTimer();
+	stopTimer();
+	if(!checkSocket())return;
+	socket.send(JSON.stringify([3, playerId, gameId]));
+	socket.send(JSON.stringify([4]));
+}
+function createGame(){
+	stageCreateGame = false;
+	if(!checkSocket())return;
+	startGameListTimer();
+	socket.send(JSON.stringify([0, gameSizeX, gameSizeY]));
+}
+function cancelCreateGame(){
+	stageCreateGame = false;
+	startGameListTimer();
+	drawGameList();
+}
+function refreshGameList(){
+	if(!checkSocket()) {
+		return;
+	}
+	socket.send(JSON.stringify([4]));
+}
+function joinGame(){
+	joinDisabled = true;
+	if(!checkSocket())return;
+	gameId = gameList[gameSelectedIndex][2];
+	socket.send(JSON.stringify([1, playerId, gameId]));
+}
+/* Event Functions END */
+
+/* Events START */
+var deviceMotionFunction = function (e) {
+	xAcc = e.accelerationIncludingGravity.x;
+	yAcc = e.accelerationIncludingGravity.y;
+	zAcc = e.accelerationIncludingGravity.z;
+	if(xLastAcc == null){
+		addShakePadding++;
+		if(addShakePadding >= 5){
+			addShakePadding = 0;
+			xLastAcc = xAcc;
+			yLastAcc = yAcc;
+			zLastAcc = zAcc;
+		}
+	}
+};
+function checkShake(){
+	if(xLastAcc == null || xAcc == null) return;
+	var change = Math.abs(xAcc-xLastAcc + yAcc-yLastAcc + zAcc-zLastAcc);
+	if(change > 15){ // Join Random Game
+		if(numGames > 0){
+			gameSelectedIndex = Math.floor(Math.random()*numGames);
+			joinGame();
+		}
+	}
+	xLastAcc = xAcc;
+	yLastAcc = yAcc;
+	zLastAcc = zAcc;
+}
+function inRect(rect, x, y, offsetPoint){
+	var offX = 0, offY = 0;
+	if(typeof offsetPoint !== "undefined"){
+		offX=offsetPoint.x;
+		offY=offsetPoint.y;
+	}	
+	if(offX+rect.x <= x && offY+rect.y <= y &&
+			(offX+rect.x+rect.w) >= x && (offY+rect.y+rect.h) >= y)
+		return true;
+	return false;
+}
+function updatePlayerMove() {
+	if(!player.dead && (player.moveX != 0 || player.moveY != 0)){
+		if(!checkSocket())return;
+		socket.send(JSON.stringify([2, playerId, gameId, player.moveX, player.moveY]));
+		if(moveTimerResetter)
+			player.moveX=player.moveY=0;
+	}
+}
+function keyPress(event) {
+	var key = (event.keyCode);
+	switch (key) {
+		case 13:
+			if(stageCreateGame){
+				createGame();
+			}else if(stageGameSelection){
+				if(showDialogBox){
+					showDialogBox = false;
+					drawGameList();
+				}else{
+					if(!joinDisabled){
+						joinGame();
+					}
+				}
+			}
+			event.preventDefault();
+			break;
+		case 38:
+		case 87:
+			if(stageGame)
+				player.moveUp();
+			else if(stageCreateGame){
+				if(gameSizeY < 25)
+					gameSizeY++;
+				createGameScreen();
+			}else if(stageGameSelection){
+				if(gameSelectedIndex == null) break;
+				if(gameSelectedIndex == 0)
+					gameSelectedIndex=numGames;
+				gameSelectedIndex--;
+				drawGameList();
+			}
+			event.preventDefault();
+			break;
+		case 83:
+		case 40:
+			if(stageGame)
+				player.moveDown();
+			else if(stageCreateGame){
+				if(gameSizeY > 15)
+					gameSizeY--;
+				createGameScreen();
+			}else if(stageGameSelection){
+				if(gameSelectedIndex == null) break;
+				gameSelectedIndex++;
+				gameSelectedIndex%=numGames;
+				drawGameList();
+			}
+			event.preventDefault();
+			break;
+		case 65:
+		case 37:
+			if(stageGame)
+				player.moveLeft();
+			else if(stageCreateGame){
+				if(gameSizeX > 15)
+					gameSizeX--;
+				createGameScreen();
+			}
+			event.preventDefault();
+			break;
+		case 68:
+		case 39:
+			if(stageGame)
+				player.moveRight();
+			else if(stageCreateGame){
+				if(gameSizeX < 25)
+					gameSizeX++;
+				createGameScreen();
+			}
+			event.preventDefault();
+			break;
+	}
+}
+function onLoad(){
+	canvas = document.getElementById("canvas");
+	context = document.getElementById("canvas").getContext("2d");
+	$(canvas).bind('touchstart mousedown', function(event) { // All click-able functions are here
+        event.pageX= event.pageX || event.originalEvent.touches[0].pageX;
+		event.pageY= event.pageY || event.originalEvent.touches[0].pageY;
+		var x = (event.pageX-canvas.offsetLeft);
+		var y = (event.pageY-canvas.offsetTop);
+		if(stageGame){
+			if(!inRect(logoutGameButton, x, y)){ // Click create button
+				var xa = Math.floor(x / (gameSizeX*10))-1;
+				var ya = -Math.floor(y / (gameSizeY*10))+1;
+				player.setMove(xa,ya);
+				if(moveTimer != null)
+					clearTimeout(moveTimer);
+				moveTimer = setTimeout(function(){ 
+					player.setMove(xa,ya);
+					moveTimerResetter=false; }, 300);
+			}
+		}
+		event.preventDefault();
+	});
+	$(canvas).bind('touchend mouseup', function(event) { // All click-able functions are here
+		event.pageX= event.pageX || event.originalEvent.changedTouches[0].pageX;
+		event.pageY= event.pageY || event.originalEvent.changedTouches[0].pageY;
+		var x = (event.pageX-canvas.offsetLeft);
+		var y = (event.pageY-canvas.offsetTop);
+		if(stageGame){
+			if(inRect(logoutGameButton, x, y)){ // Click create button
+				leaveGame();
+			}else{
+				if(!moveTimerResetter)
+					player.setMove(0,0);
+				moveTimerResetter=true;
+				if(moveTimer != null){
+					clearTimeout(moveTimer);
+					moveTimer=null;
+				}
+			}
+		}else if(stageGameOver){
+			if(inRect(startGameButton, x, y, gameOverScreenOffset)){ // Click create button
+				continueGame();
+			}
+			else if(inRect(leaveGameButton, x, y, gameOverScreenOffset)){ // click join button
+				leaveGame();
+			}
+		}else if(stageCreateGame){// Create Game
+			if(inRect(okGameButton, x, y)){ // Click ok
+				createGame();
+			}else if(inRect(cancelGameButton, x, y)){ // Click cancel
+				cancelCreateGame();
+			}else if(inRect(expandXButton, x, y)){ // Click Expand X
+				if(gameSizeX < 25)
+					gameSizeX++;
+				createGameScreen();
+			}else if(inRect(contractXButton, x, y)){ // Click Contract X
+				if(gameSizeX > 15)
+					gameSizeX--;
+				createGameScreen();
+				return;
+			}else if(inRect(expandYButton, x, y)){ // Click Expand Y
+				if(gameSizeY < 25)
+					gameSizeY++;
+				createGameScreen();
+			}else if(inRect(contractYButton, x, y)){ // Click Contract Y
+				if(gameSizeY > 15)
+					gameSizeY--;
+				createGameScreen();
+			}
+		}else if(stageGameSelection){
+			if(showDialogBox){
+				if(inRect(okDialogButton, x, y)){ // Click ok
+					showDialogBox = false;
+					drawGameList();
+				}
+			}else if(inRect(createGameButton, x, y)){ // Click create button
+				stopGameListTimer();
+				createGameScreen();
+			}
+			else if(inRect(refreshButton, x, y)){ // Click refresh button
+				refreshGameList();
+			}
+			else if(!joinDisabled && inRect(joinGameButton, x, y)){ // click join button
+				joinGame();
+			}else {
+				var i = 0;
+				for(;i < numGames; i++){ // Select a game by clicking
+					if(inRect(gameSelectionRect[i], x, y)){
+						gameSelectedIndex = i;
+						drawGameList();
+						break;
+					}
+				}
+			}
+		}
+		event.preventDefault();
+	});
+	initConnection(); // Start the socket connection
+	
+	// Load all images
+	enemyImg = document.getElementById("enemyId");
+	boxImg = document.getElementById("boxId");
+	wallImg = document.getElementById("wallId");
+	playerImgs[0] = document.getElementById("player1");
+	playerImgs[1] = document.getElementById("player2");
+	playerImgs[2] = document.getElementById("player3");
+	playerImgs[3] = document.getElementById("player4");
+	deadPlayerImgs[0] = document.getElementById("dead1");
+	deadPlayerImgs[1] = document.getElementById("dead2");
+	deadPlayerImgs[2] = document.getElementById("dead3");
+	deadPlayerImgs[3] = document.getElementById("dead4");
+	bossImgTL = document.getElementById("bossTLId");
+	bossImgTR = document.getElementById("bossTRId");
+	bossImgBL = document.getElementById("bossBLId");
+	bossImgBR = document.getElementById("bossBRId");
+	enemyDeadImg = document.getElementById("flame");
+	addEventListener("keydown", keyPress);
+	gameover = false;
+	score = 0;
+}
+/* Events END */
+
+/* Game Draw Functions START */
+function clearRect(){
+	context.fillStyle="#ffffff";
+	context.fillRect(0,0,gameSizeX*30,gameSizeY*30);
+}
+function drawGameBoard(){
+	clearRect();
+	var i;
+	var samePoint = [];
+	for (i=0;i<objectIdList.length;i++){
+		var obj = objectIdList[i];
+		if(typeof objectIdList[i] === "undefined") continue;
+		if(obj.id == playerNum){
+			// Check for player overlap
+			var i2;
+			for(i2=0; i2 < samePoint.length; i2++){
+				if(samePoint[i2][0] == obj.x && samePoint[i2][1] == obj.y){
+					samePoint[i2][2]++;
+					break;
+				}
+			}
+			if(i2 == samePoint.length) samePoint[samePoint.length] = [obj.x, obj.y, 0];
+			obj.draw(context, playerSector[samePoint[i2][2]]);
+		}else
+			obj.draw(context);
+	}
+	context.font="14px Arial";
+	context.fillStyle="#000000";
+	context.fillText("You",player.x*30+2,player.y*30+10);
+	// Draw Touch Zones
+	if(drawHitSpots){
+		context.beginPath();
+		var oneThirdX = gameSizeX*10;
+		var twoThirdX = gameSizeX*20;
+		var oneThirdY = gameSizeY*10;
+		var twoThirdY = gameSizeY*20;
+		var widthX = gameSizeX*30;
+		var heightY = gameSizeY*30;
+		context.moveTo(oneThirdX,0);
+		context.lineTo(oneThirdX,heightY);
+		context.moveTo(twoThirdX,0);
+		context.lineTo(twoThirdX,heightY);
+		context.moveTo(0,oneThirdY);
+		context.lineTo(widthX,oneThirdY);
+		context.moveTo(0,twoThirdY);
+		context.lineTo(widthX,twoThirdY);
+		// Up
+		context.moveTo(gameSizeX*12.5,gameSizeY*7.5);
+		context.lineTo(gameSizeX*15,gameSizeY*2.5);
+		context.lineTo(gameSizeX*17.5,gameSizeY*7.5);
+		// Down
+		context.moveTo(gameSizeX*12.5,gameSizeY*22.5);
+		context.lineTo(gameSizeX*15,gameSizeY*27.5);
+		context.lineTo(gameSizeX*17.5,gameSizeY*22.5);
+		// Left
+		context.moveTo(gameSizeX*7.5, gameSizeY*12.5);
+		context.lineTo(gameSizeX*2.5, gameSizeY*15);
+		context.lineTo(gameSizeX*7.5, gameSizeY*17.5);
+		// Right
+		context.moveTo(gameSizeX*22.5, gameSizeY*12.5);
+		context.lineTo(gameSizeX*27.5, gameSizeY*15);
+		context.lineTo(gameSizeX*22.5, gameSizeY*17.5);
+		// Top Left
+		context.moveTo(gameSizeX*5, gameSizeY*7.5);
+		context.lineTo(gameSizeX*2.5, gameSizeY*2.5);
+		context.lineTo(gameSizeX*7.5, gameSizeY*5);
+		// Top Right
+		context.moveTo(gameSizeX*25, gameSizeY*7.5);
+		context.lineTo(gameSizeX*27.5, gameSizeY*2.5);
+		context.lineTo(gameSizeX*22.5, gameSizeY*5);
+		// Bottom Left
+		context.moveTo(gameSizeX*5, gameSizeY*22.5);
+		context.lineTo(gameSizeX*2.5, gameSizeY*27.5);
+		context.lineTo(gameSizeX*7.5, gameSizeY*25);
+		// Bottom Right
+		context.moveTo(gameSizeX*25, gameSizeY*22.5);
+		context.lineTo(gameSizeX*27.5, gameSizeY*27.5);
+		context.lineTo(gameSizeX*22.5, gameSizeY*25);
+		
+		context.stroke();
+	}
+	// Draw Exit Game, Score and Level
+	logoutGameButton.y = gameSizeY*30-26;
+	context.lineWidth = 2;
+	context.font="14px Georgia";
+	context.fillStyle="#0099FF";
+	context.strokeStyle="#99D6FF";
+	context.fillRect(logoutGameButton.x, logoutGameButton.y, logoutGameButton.w, logoutGameButton.h);
+	context.strokeRect(logoutGameButton.x, logoutGameButton.y, logoutGameButton.w, logoutGameButton.h);
+	context.fillStyle="#000000";
+	context.fillText("Exit Game",logoutGameButton.x+12,logoutGameButton.y+18);
+	
+	context.lineWidth = 1;
+	context.font="bold 24px Arial";
+	context.fillStyle="#ffffff";
+	context.fillText("Score: "+score,21,23);
+	context.fillText("Level "+level,gameSizeX*30/2-40,23);
+	context.strokeStyle="#000000";
+	context.strokeText("Score: "+score,21,23);
+	context.strokeText("Level "+level,gameSizeX*30/2-40,23);
+}
+function toggleDrawHitSpots(e){
+	drawHitSpots = !drawHitSpots;
+	preventOnClick(e);
+}
+/* Game Draw Functions END */
+
+/* Game Over Screen START */
+function gameOverScreen(win){
+	gameOverCountdown=15;
+	stopTimer();
+	stageGameOver = true;
+	var w = ((30*gameSizeX)-250)/2;
+	var h = ((30*gameSizeY)-250)/2;
+	gameOverScreenOffset.x = w;
+	gameOverScreenOffset.y = h;
+	gameOverX = w;
+	gameOverY = h;
+	context.lineWidth = 3;
+	context.fillStyle="#2347b2";
+	context.strokeStyle="#4775ff";
+	context.fillRect(w, h, 250, 250);
+	context.strokeRect(w, h, 250, 250);
+	context.lineWidth = 2;
+	context.fillStyle="#000000";
+	context.strokeStyle="#000000";
+	context.font="bold 18px Georgia";
+	if(win)
+		context.fillText("You Win!!!",w+80,h+22);
+	else
+		context.fillText("Game Over",w+75,h+22);
+	context.font="bold 18px Georgia";
+	context.fillText("Score: "+this.score,w+30,h+100);
+	context.font="14px Georgia";
+	
+	context.fillStyle="#0099FF";
+	context.strokeStyle="#99D6FF";
+	context.fillRect(w+startGameButton.x, h+startGameButton.y, startGameButton.w, startGameButton.h);
+	context.strokeRect(w+startGameButton.x, h+startGameButton.y, startGameButton.w, startGameButton.h);
+	context.fillRect(w+leaveGameButton.x, h+leaveGameButton.y, leaveGameButton.w, leaveGameButton.h);
+	context.strokeRect(w+leaveGameButton.x, h+leaveGameButton.y, leaveGameButton.w, leaveGameButton.h);
+	context.fillStyle="#000000";
+	context.fillText("Start Game",w+159,h+233);
+	context.fillText("Leave Game",w+24,h+233);
+
+	context.fillStyle="#000000";
+	context.font="bold 48px Arial";
+	context.fillText(gameOverCountdown,w+100,h+160);
+	startGameOverTimer();
+}
+function gameOverScreenRank(rank){
+	context.fillStyle="#000000";
+	context.font="bold 18px Georgia";
+	context.fillText("Rank: #"+rank,gameOverX+30,gameOverY+70);
+}
+function gameOverScreenWait(numLeft){
+	context.fillStyle="#2347b2";
+	context.fillRect(gameOverX+20, gameOverY+178, 200, 26);
+	context.fillStyle="#000000";
+	context.font="14px Arial";
+	context.fillText("# Players still choosing: "+numLeft,gameOverX+30,gameOverY+200);
+}
+function gameOverUpdateClock(){
+	gameOverCountdown--;
+	context.fillStyle="#2347b2";
+	context.fillRect(gameOverX+100, gameOverY+124, 55, 40);
+	context.fillStyle="#000000";
+	context.font="bold 48px Arial";
+	if(gameOverCountdown < 10)
+		context.fillText("0"+gameOverCountdown,gameOverX+100,gameOverY+160);
+	else
+		context.fillText(gameOverCountdown,gameOverX+100,gameOverY+160);
+	if(gameOverCountdown <= 0){
+		leaveGame();
+	}
+}
+/* Game Over Screen END */
+
+/* Timers */
+function startTimer(){
+	if(timer == null)
+		timer=setInterval(function () { updatePlayerMove();}, 200);
+}
+function stopTimer(){
+	if(timer != null)
+		clearInterval(timer);
+	timer = null;
+}
+function startGameOverTimer(){
+	if(gameOverTimer == null){
+		gameOverTimer=setInterval(function () { gameOverUpdateClock();}, 1000);
+	}
+}
+function stopGameOverTimer(){
+	if(gameOverTimer != null)
+		clearInterval(gameOverTimer);
+	gameOverTimer = null;
+}
+function startGameListTimer(){
+	if(shakeTimer == null && window.DeviceMotionEvent){
+		xLastAcc=null;
+		xAcc = null;
+		window.addEventListener("devicemotion", deviceMotionFunction, false);
+		shakeTimer=setInterval(function () { checkShake();}, 200);
+	}
+	if(gameListTimer == null)
+		gameListTimer=setInterval(function () { refreshGameList();}, 10000);
+}
+function stopGameListTimer(){
+	if(shakeTimer != null && window.DeviceMotionEvent){
+		window.removeEventListener("devicemotion", deviceMotionFunction, false);
+		xAcc = null;
+		xLastAcc = null;
+		clearInterval(shakeTimer);
+		shakeTimer = null;
+	}
+	if(gameListTimer != null)
+		clearInterval(gameListTimer);
+	gameListTimer = null;
+}
+
+/* Misc */
+function preventOnClick(e){
+	e.preventDefault();
+	e.stopImmediatePropagation();
+	e.stopPropagation();
+}
+function legendToggle(t){
+	if(legendToggleT){
+		$("#legend").css("bottom", "-102px");
+	}
+	else{
+		$("#legend").css("bottom", "0px");
+	}
+	legendToggleT=!legendToggleT;
+}
+function nextBossHACK(){
+	if(stageGame)
+		socket.send(JSON.stringify([6, gameId]));
+}
+</script>
+<link rel="stylesheet" type="text/css" href="game.css">
+</head> 
+	<body onClick="preventOnClick(event);"  background="img/background.png" onload="onLoad();">
+	<canvas id="canvas" width="450" height="450" style="border:1px solid;">
+		Browser does not support HTML5</canvas>
+	<div id="legend" onclick="legendToggle(this);">
+	<span><b>Legend</b></span><span style="float:right" onclick="toggleDrawHitSpots(event)"><b>Toggle Arrow Boxes</b></span>
+	<table align="center" style="textalign:center;border-top: 1px solid grey">
+	<tr>
+	<td class="legend" style="padding-right:5px;">Blank</td>
+	<td class="legend" style="padding-right:5px;">Player</td>
+	<td class="legend" style="padding-right:5px;">Enemy</td>
+	<td class="legend" style="padding-right:5px;">Boxes</td>
+	<td class="legend" style="padding-right:5px;">Wall</td>
+	<td class="legend" style="padding-right:5px;">Boss</td>
+	</tr>
+	<tr>
+	<td class="legend"><img id="blankId" style="border:1px solid #000000;" width="30" height="30" src="img/blank.png"/></td>
+	<td class="legend"><img id="playerId" style="border:1px solid #000000;" width="30" height="30" src="img/playerY.png"/></td>
+	<td class="legend"><img id="enemyId" style="border:1px solid #000000;" width="30" height="30" src="img/devil.png"/></td>
+	<td class="legend"><img id="boxId" style="border:1px solid #000000;" width="30" height="30" src="img/box.png"/></td>
+	<td class="legend"><img id="wallId" style="border:1px solid #000000;" width="30" height="30" src="img/wall.png"/></td>
+	<td class="legend">
+	<table cellspacing="0" cellpadding="0"><tr>
+	<td><img id="bossTLId" style="border-top:1px solid #000000;border-left:1px solid #000000;" width="30" height="30" src="img/boss_tl.png"/></td>
+	<td><img id="bossTRId" style="border-top:1px solid #000000;border-right:1px solid #000000;" width="30" height="30" src="img/boss_tr.png"/></td></tr>
+	<tr><td><img id="bossBLId" style="border-left:1px solid #000000;border-bottom:1px solid #000000;" width="30" height="30" src="img/boss_bl.png"/></td>
+	<td><img id="bossBRId" style="border-bottom:1px solid #000000;border-right:1px solid #000000;" width="30" height="30" src="img/boss_br.png"/></td></tr>
+	</table>
+	</td></tr>
+	</table>
+	</div>
+	<div style="clear:both">
+	<a href="" onClick="nextBossHACK();">HACK: Goto Next Boss Level</a>
+	</div>
+	<div>
+	For optimal screen size please play in fullscreen mode.<br>
+	On an ipad, add to homescreen and run from there.
+	</div>
+	
+	<img id="player1" style="display:none;" width="30" height="30" src="img/playerY.png"/>
+	<img id="player2" style="display:none;" width="30" height="30" src="img/playerG.png"/>
+	<img id="player3" style="display:none;" width="30" height="30" src="img/playerR.png"/>
+	<img id="player4" style="display:none;" width="30" height="30" src="img/playerB.png"/>
+	<img id="dead1" style="display:none;" width="30" height="30" src="img/deadY.gif"/>
+	<img id="dead2" style="display:none;" width="30" height="30" src="img/deadG.gif"/>
+	<img id="dead3" style="display:none;" width="30" height="30" src="img/deadR.gif"/>
+	<img id="dead4" style="display:none;" width="30" height="30" src="img/deadB.gif"/>
+	<img id="flame" style="display:none;" width="30" height="30" src="img/flame.gif"/>
+	</body> 
+</html> 
+
